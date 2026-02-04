@@ -3,19 +3,52 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>手書きメモ - 画像挿入・保存機能付き</title>
-    <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #f0f0f0; font-family: sans-serif; }
-        .toolbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: rgba(255, 255, 255, 0.95); padding: 10px 15px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 100; }
-        canvas { display: block; background-color: white; touch-action: none; }
-        .btn { padding: 8px 12px; cursor: pointer; border: 1px solid #ccc; border-radius: 20px; background-color: white; font-size: 13px; outline: none; white-space: nowrap; }
-        .btn.active { background-color: #007bff; color: white; border-color: #007bff; }
-        #textInputOverlay { position: fixed; display: none; border: 1px dashed #007bff; background: transparent; outline: none; z-index: 200; }
-        input[type="color"] { border: none; width: 25px; height: 25px; cursor: pointer; }
-        .save-btn { background-color: #28a745; color: white; border: none; }
-        .save-btn:hover { background-color: #218838; }
-        #imageInput { display: none; } /* 隠しファイル入力 */
-    </style>
+    <title>手書きメモ - 画像リサイズ対応</title>
+<style>
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #f0f0f0; font-family: sans-serif; }
+    
+    .toolbar { 
+        position: fixed; 
+        top: 10px; 
+        left: 50%; 
+        transform: translateX(-50%); 
+        display: flex; 
+        flex-wrap: wrap; 
+        justify-content: center;
+        gap: 6px; 
+        align-items: center; 
+        background: rgba(255, 255, 255, 0.95); 
+        padding: 8px 12px; 
+        border-radius: 25px; 
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2); 
+        z-index: 100; 
+        width: 90%; 
+        max-width: 650px; 
+    }
+
+    canvas { display: block; background-color: white; touch-action: none; }
+
+    .btn { 
+        padding: 6px 10px; 
+        cursor: pointer; 
+        border: 1px solid #ccc; 
+        border-radius: 15px; 
+        background-color: white; 
+        font-size: 12px; 
+        outline: none; 
+        white-space: nowrap; 
+    }
+
+    .btn.active { background-color: #007bff; color: white; border-color: #007bff; }
+    
+    #textInputOverlay { position: fixed; display: none; border: 1px dashed #007bff; background: transparent; outline: none; z-index: 200; }
+    
+    input[type="color"] { border: none; width: 22px; height: 22px; cursor: pointer; background: none; }
+    input[type="range"] { width: 60px; } 
+
+    .save-btn { background-color: #28a745; color: white; border: none; }
+    #imageInput { display: none; }
+</style>
 </head>
 <body>
 
@@ -23,7 +56,8 @@
         <button class="btn active" id="penBtn">ペン</button>
         <button class="btn" id="eraserBtn">消しゴム</button>
         <button class="btn" id="textBtn">文字</button>
-        <button class="btn" id="imageBtn">画像</button> <button class="btn" id="moveBtn">移動</button>
+        <button class="btn" id="imageBtn">画像</button>
+        <button class="btn" id="moveBtn">移動・拡縮</button>
         <input type="color" id="colorPicker" value="#000000">
         <input type="range" id="lineWidth" min="1" max="30" value="5">
         <button class="btn" id="clearBtn" style="background-color: #ff4d4d; color: white; border: none;">全消去</button>
@@ -46,7 +80,9 @@
         let currentObject = null;
         let selectedObject = null;
         let isDragging = false;
+        let isResizing = false; // リサイズ中フラグ
         let startX, startY;
+        const HANDLE_SIZE = 10; // リサイズハンドルの大きさ
 
         function resizeCanvas() {
             canvas.width = window.innerWidth;
@@ -68,79 +104,42 @@
         document.getElementById('eraserBtn').onclick = (e) => setMode('eraser', e.target);
         document.getElementById('textBtn').onclick = (e) => setMode('text', e.target);
         document.getElementById('moveBtn').onclick = (e) => setMode('move', e.target);
-        
-        // 画像ボタンの処理
-        document.getElementById('imageBtn').onclick = () => {
-            imageInput.click();
-        };
+        document.getElementById('imageBtn').onclick = () => imageInput.click();
+
+        // 画像読込処理 (共通)
+        function addImageObject(img, x, y) {
+            const scale = Math.min((canvas.width * 0.3) / img.width, (canvas.height * 0.3) / img.height, 1);
+            const w = img.width * scale;
+            const h = img.height * scale;
+            const obj = { type: 'image', img: img, x: x, y: y, w: w, h: h, bounds: { x: x, y: y, w: w, h: h } };
+            objects.push(obj);
+            redraw();
+            setMode('move', document.getElementById('moveBtn'));
+        }
 
         imageInput.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
-            reader.onload = (event) => {
+            reader.onload = (ev) => {
                 const img = new Image();
-                img.onload = () => {
-                    // 画面の3割程度のサイズにリサイズして中央付近に配置
-                    const scale = Math.min((canvas.width * 0.3) / img.width, (canvas.height * 0.3) / img.height, 1);
-                    const w = img.width * scale;
-                    const h = img.height * scale;
-                    const obj = {
-                        type: 'image',
-                        img: img,
-                        x: 50,
-                        y: 100,
-                        w: w,
-                        h: h,
-                        bounds: { x: 50, y: 100, w: w, h: h }
-                    };
-                    objects.push(obj);
-                    redraw();
-                    setMode('move', document.getElementById('moveBtn')); // 挿入後すぐに移動モードへ
-                };
-                img.src = event.target.result;
+                img.onload = () => addImageObject(img, 50, 100);
+                img.src = ev.target.result;
             };
             reader.readAsDataURL(file);
-            e.target.value = ''; // 連続選択可能にする
+            e.target.value = '';
         };
 
-        // --- クリップボードからの貼り付け機能 ---
         window.addEventListener('paste', (e) => {
             const items = e.clipboardData.items;
             for (let i = 0; i < items.length; i++) {
                 if (items[i].type.indexOf('image') !== -1) {
                     const blob = items[i].getAsFile();
                     const reader = new FileReader();
-
-                    reader.onload = (event) => {
+                    reader.onload = (ev) => {
                         const img = new Image();
-                        img.onload = () => {
-                            // 貼り付け時の初期サイズと位置の設定
-                            const scale = Math.min((canvas.width * 0.3) / img.width, (canvas.height * 0.3) / img.height, 1);
-                            const w = img.width * scale;
-                            const h = img.height * scale;
-                            
-                            // 画面中央付近に配置
-                            const obj = {
-                                type: 'image',
-                                img: img,
-                                x: window.innerWidth / 2 - w / 2,
-                                y: window.innerHeight / 2 - h / 2,
-                                w: w,
-                                h: h,
-                                bounds: { 
-                                    x: window.innerWidth / 2 - w / 2, 
-                                    y: window.innerHeight / 2 - h / 2, 
-                                    w: w, 
-                                    h: h 
-                                }
-                            };
-                            objects.push(obj);
-                            redraw();
-                            setMode('move', document.getElementById('moveBtn')); // 貼り付け後、即移動できるようにする
-                        };
-                        img.src = event.target.result;
+                        img.onload = () => addImageObject(img, window.innerWidth/2 - 50, window.innerHeight/2 - 50);
+                        img.src = ev.target.result;
                     };
                     reader.readAsDataURL(blob);
                 }
@@ -173,12 +172,19 @@
                     ctx.drawImage(obj.img, obj.x, obj.y, obj.w, obj.h);
                 }
 
+                // 選択中の表示
                 if (!isExport && mode === 'move' && obj === selectedObject) {
                     ctx.strokeStyle = '#007bff';
                     ctx.lineWidth = 1;
                     ctx.setLineDash([5, 5]);
-                    ctx.strokeRect(obj.bounds.x - 5, obj.bounds.y - 5, obj.bounds.w + 10, obj.bounds.h + 10);
+                    ctx.strokeRect(obj.bounds.x - 2, obj.bounds.y - 2, obj.bounds.w + 4, obj.bounds.h + 4);
                     ctx.setLineDash([]);
+                    
+                    // 画像の場合のみリサイズハンドルを描画
+                    if (obj.type === 'image') {
+                        ctx.fillStyle = '#007bff';
+                        ctx.fillRect(obj.x + obj.w - HANDLE_SIZE/2, obj.y + obj.h - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+                    }
                 }
             });
         }
@@ -190,9 +196,17 @@
         }
 
         function isHit(obj, pos) {
-            if(!obj.bounds) return false;
             return pos.x >= obj.bounds.x && pos.x <= obj.bounds.x + obj.bounds.w &&
                    pos.y >= obj.bounds.y && pos.y <= obj.bounds.y + obj.bounds.h;
+        }
+
+        // ハンドルへの当たり判定
+        function isHandleHit(obj, pos) {
+            if (obj.type !== 'image') return false;
+            const hX = obj.x + obj.w;
+            const hY = obj.y + obj.h;
+            return pos.x >= hX - HANDLE_SIZE && pos.x <= hX + HANDLE_SIZE &&
+                   pos.y >= hY - HANDLE_SIZE && pos.y <= hY + HANDLE_SIZE;
         }
 
         canvas.onmousedown = canvas.ontouchstart = (e) => {
@@ -202,12 +216,7 @@
 
             if (mode === 'pen') {
                 isDragging = true;
-                currentObject = { 
-                    type: 'pen', 
-                    color: document.getElementById('colorPicker').value, 
-                    width: parseInt(document.getElementById('lineWidth').value), 
-                    points: [{x: pos.x, y: pos.y}] 
-                };
+                currentObject = { type: 'pen', color: document.getElementById('colorPicker').value, width: parseInt(document.getElementById('lineWidth').value), points: [{x: pos.x, y: pos.y}] };
                 objects.push(currentObject);
             } else if (mode === 'eraser') {
                 isDragging = true;
@@ -215,36 +224,49 @@
             } else if (mode === 'text') {
                 showTextInput(pos.x, pos.y);
             } else if (mode === 'move') {
-                selectedObject = [...objects].reverse().find(obj => isHit(obj, pos));
-                if (selectedObject) isDragging = true;
+                // まずハンドルを触っているか確認
+                if (selectedObject && isHandleHit(selectedObject, pos)) {
+                    isResizing = true;
+                } else {
+                    selectedObject = [...objects].reverse().find(obj => isHit(obj, pos));
+                    if (selectedObject) isDragging = true;
+                }
                 redraw();
             }
         };
 
         window.onmousemove = window.ontouchmove = (e) => {
-            if (!isDragging) return;
             const pos = getMousePos(e);
 
-            if (mode === 'pen') {
-                currentObject.points.push({x: pos.x, y: pos.y});
-            } else if (mode === 'eraser') {
-                eraseAt(pos);
-            } else if (mode === 'move' && selectedObject) {
-                const dx = pos.x - startX;
-                const dy = pos.y - startY;
-                if (selectedObject.type === 'pen') {
-                    selectedObject.points.forEach(p => { p.x += dx; p.y += dy; });
-                } else if (selectedObject.type === 'text' || selectedObject.type === 'image') {
-                    selectedObject.x += dx; selectedObject.y += dy;
+            if (isResizing && selectedObject) {
+                // リサイズ処理 (アスペクト比を維持したい場合は調整可能ですが、今回は自由変倍)
+                selectedObject.w = Math.max(20, pos.x - selectedObject.x);
+                selectedObject.h = Math.max(20, pos.y - selectedObject.y);
+                updateBounds(selectedObject);
+                redraw();
+            } else if (isDragging) {
+                if (mode === 'pen') {
+                    currentObject.points.push({x: pos.x, y: pos.y});
+                } else if (mode === 'eraser') {
+                    eraseAt(pos);
+                } else if (mode === 'move' && selectedObject) {
+                    const dx = pos.x - startX;
+                    const dy = pos.y - startY;
+                    if (selectedObject.type === 'pen') {
+                        selectedObject.points.forEach(p => { p.x += dx; p.y += dy; });
+                    } else {
+                        selectedObject.x += dx; selectedObject.y += dy;
+                    }
+                    startX = pos.x; startY = pos.y;
                 }
-                startX = pos.x; startY = pos.y;
+                updateBounds(selectedObject || currentObject);
+                redraw();
             }
-            if(selectedObject || currentObject) updateBounds(selectedObject || currentObject);
-            redraw();
         };
 
         window.onmouseup = window.ontouchend = () => {
             isDragging = false;
+            isResizing = false;
             currentObject = null;
         };
 
@@ -281,12 +303,7 @@
             setTimeout(() => textInputOverlay.focus(), 10);
             textInputOverlay.onkeydown = (e) => {
                 if (e.key === 'Enter') {
-                    const obj = { 
-                        type: 'text', x, y, 
-                        text: textInputOverlay.value, 
-                        color: document.getElementById('colorPicker').value, 
-                        width: parseInt(document.getElementById('lineWidth').value) 
-                    };
+                    const obj = { type: 'text', x, y, text: textInputOverlay.value, color: document.getElementById('colorPicker').value, width: parseInt(document.getElementById('lineWidth').value) };
                     updateBounds(obj);
                     objects.push(obj);
                     textInputOverlay.style.display = 'none';
@@ -301,13 +318,7 @@
             redraw(true); 
             const image = canvas.toDataURL("image/png");
             const now = new Date();
-            const yyyy = now.getFullYear();
-            const mm = String(now.getMonth() + 1).padStart(2, '0');
-            const dd = String(now.getDate()).padStart(2, '0');
-            const hh = String(now.getHours()).padStart(2, '0');
-            const mi = String(now.getMinutes()).padStart(2, '0');
-            const ss = String(now.getSeconds()).padStart(2, '0');
-            const fileName = `${yyyy}${mm}${dd}${hh}${mi}${ss}.png`;
+            const fileName = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.png`;
             const link = document.createElement('a');
             link.download = fileName;
             link.href = image;
