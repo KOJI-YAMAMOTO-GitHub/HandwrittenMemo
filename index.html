@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>手書きメモ - 保存機能付き</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #f0f0f0; font-family: sans-serif; }
+        .toolbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: rgba(255, 255, 255, 0.95); padding: 10px 15px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 100; }
+        canvas { display: block; background-color: white; touch-action: none; }
+        .btn { padding: 8px 12px; cursor: pointer; border: 1px solid #ccc; border-radius: 20px; background-color: white; font-size: 13px; outline: none; }
+        .btn.active { background-color: #007bff; color: white; border-color: #007bff; }
+        #textInputOverlay { position: fixed; display: none; border: 1px dashed #007bff; background: transparent; outline: none; z-index: 200; }
+        input[type="color"] { border: none; width: 25px; height: 25px; cursor: pointer; }
+        .save-btn { background-color: #28a745; color: white; border: none; }
+        .save-btn:hover { background-color: #218838; }
+    </style>
+</head>
+<body>
+
+    <div class="toolbar">
+        <button class="btn active" id="penBtn">ペン</button>
+        <button class="btn" id="eraserBtn">消しゴム</button>
+        <button class="btn" id="textBtn">文字</button>
+        <button class="btn" id="moveBtn">移動</button>
+        <input type="color" id="colorPicker" value="#000000">
+        <input type="range" id="lineWidth" min="1" max="30" value="5">
+        <button class="btn" id="clearBtn" style="background-color: #ff4d4d; color: white; border: none;">全消去</button>
+        <button class="btn save-btn" id="downloadBtn">保存</button>
+    </div>
+
+    <input type="text" id="textInputOverlay">
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const textInputOverlay = document.getElementById('textInputOverlay');
+        const buttons = document.querySelectorAll('.btn');
+
+        let mode = 'pen';
+        let objects = []; 
+        let currentObject = null;
+        let selectedObject = null;
+        let isDragging = false;
+        let startX, startY;
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            redraw();
+        }
+        window.onresize = resizeCanvas;
+        resizeCanvas();
+
+        function setMode(newMode, btn) {
+            mode = newMode;
+            buttons.forEach(b => b.classList.remove('active'));
+            if(btn) btn.classList.add('active');
+            selectedObject = null;
+            redraw();
+        }
+
+        document.getElementById('penBtn').onclick = (e) => setMode('pen', e.target);
+        document.getElementById('eraserBtn').onclick = (e) => setMode('eraser', e.target);
+        document.getElementById('textBtn').onclick = (e) => setMode('text', e.target);
+        document.getElementById('moveBtn').onclick = (e) => setMode('move', e.target);
+
+        function redraw(isExport = false) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 背景を白で塗る（保存時にも必要）
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            objects.forEach(obj => {
+                ctx.beginPath();
+                ctx.strokeStyle = obj.color;
+                ctx.fillStyle = obj.color;
+                ctx.lineWidth = obj.width;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+
+                if (obj.type === 'pen') {
+                    obj.points.forEach((p, i) => {
+                        if (i === 0) ctx.moveTo(p.x, p.y);
+                        else ctx.lineTo(p.x, p.y);
+                    });
+                    ctx.stroke();
+                } else if (obj.type === 'text') {
+                    ctx.font = `${obj.width + 15}px sans-serif`;
+                    ctx.fillText(obj.text, obj.x, obj.y);
+                }
+
+                // 保存時（isExport=true）以外で、移動モードで選択中なら枠を表示
+                if (!isExport && mode === 'move' && obj === selectedObject) {
+                    ctx.strokeStyle = '#007bff';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeRect(obj.bounds.x - 5, obj.bounds.y - 5, obj.bounds.w + 10, obj.bounds.h + 10);
+                    ctx.setLineDash([]);
+                }
+            });
+        }
+
+        // --- 描画・操作ロジック ---
+        function getMousePos(e) {
+            const x = e.clientX || (e.touches && e.touches[0].clientX);
+            const y = e.clientY || (e.touches && e.touches[0].clientY);
+            return { x, y };
+        }
+
+        function isHit(obj, pos) {
+            if(!obj.bounds) return false;
+            return pos.x >= obj.bounds.x && pos.x <= obj.bounds.x + obj.bounds.w &&
+                   pos.y >= obj.bounds.y && pos.y <= obj.bounds.y + obj.bounds.h;
+        }
+
+        canvas.onmousedown = canvas.ontouchstart = (e) => {
+            if (e.type === 'touchstart') e.preventDefault();
+            const pos = getMousePos(e);
+            startX = pos.x; startY = pos.y;
+
+            if (mode === 'pen') {
+                isDragging = true;
+                currentObject = { 
+                    type: 'pen', 
+                    color: document.getElementById('colorPicker').value, 
+                    width: parseInt(document.getElementById('lineWidth').value), 
+                    points: [{x: pos.x, y: pos.y}] 
+                };
+                objects.push(currentObject);
+            } else if (mode === 'eraser') {
+                isDragging = true;
+                eraseAt(pos);
+            } else if (mode === 'text') {
+                showTextInput(pos.x, pos.y);
+            } else if (mode === 'move') {
+                selectedObject = [...objects].reverse().find(obj => isHit(obj, pos));
+                if (selectedObject) isDragging = true;
+                redraw();
+            }
+        };
+
+        window.onmousemove = window.ontouchmove = (e) => {
+            if (!isDragging) return;
+            const pos = getMousePos(e);
+
+            if (mode === 'pen') {
+                currentObject.points.push({x: pos.x, y: pos.y});
+            } else if (mode === 'eraser') {
+                eraseAt(pos);
+            } else if (mode === 'move' && selectedObject) {
+                const dx = pos.x - startX;
+                const dy = pos.y - startY;
+                if (selectedObject.type === 'pen') {
+                    selectedObject.points.forEach(p => { p.x += dx; p.y += dy; });
+                } else {
+                    selectedObject.x += dx; selectedObject.y += dy;
+                }
+                startX = pos.x; startY = pos.y;
+            }
+            if(selectedObject || currentObject) updateBounds(selectedObject || currentObject);
+            redraw();
+        };
+
+        window.onmouseup = window.ontouchend = () => {
+            isDragging = false;
+            currentObject = null;
+        };
+
+        function eraseAt(pos) {
+            const targetIndex = objects.findIndex(obj => isHit(obj, pos));
+            if (targetIndex !== -1) {
+                objects.splice(targetIndex, 1);
+                redraw();
+            }
+        }
+
+        function updateBounds(obj) {
+            if (!obj) return;
+            if (obj.type === 'pen') {
+                const xs = obj.points.map(p => p.x);
+                const ys = obj.points.map(p => p.y);
+                obj.bounds = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+            } else if (obj.type === 'text') {
+                const fontSize = obj.width + 15;
+                ctx.font = `${fontSize}px sans-serif`;
+                const metrics = ctx.measureText(obj.text);
+                obj.bounds = { x: obj.x, y: obj.y - fontSize, w: metrics.width, h: fontSize };
+            }
+        }
+
+        function showTextInput(x, y) {
+            textInputOverlay.style.display = 'block';
+            textInputOverlay.style.left = x + 'px';
+            textInputOverlay.style.top = (y - 15) + 'px';
+            textInputOverlay.style.fontSize = (parseInt(document.getElementById('lineWidth').value) + 15) + 'px';
+            textInputOverlay.value = '';
+            setTimeout(() => textInputOverlay.focus(), 10);
+            textInputOverlay.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    const obj = { 
+                        type: 'text', x, y, 
+                        text: textInputOverlay.value, 
+                        color: document.getElementById('colorPicker').value, 
+                        width: parseInt(document.getElementById('lineWidth').value) 
+                    };
+                    updateBounds(obj);
+                    objects.push(obj);
+                    textInputOverlay.style.display = 'none';
+                    redraw();
+                }
+            };
+        }
+
+        document.getElementById('clearBtn').onclick = () => { if(confirm('全消去しますか？')) { objects = []; redraw(); } };
+
+        // --- 保存機能の実装 ---
+        document.getElementById('downloadBtn').onclick = () => {
+            // 1. 選択枠などを消した状態で最終描画を行う
+            redraw(true); 
+
+            // 2. キャンバスの内容を画像化
+            const image = canvas.toDataURL("image/png");
+
+            // 現在時刻からフォーマットを作成
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mi = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    
+    const fileName = `${yyyy}${mm}${dd}${hh}${mi}${ss}.png`;
+
+
+            // 3. ダウンロード用リンクを作成して実行
+            const link = document.createElement('a');
+            // link.download = `drawing-${Date.now()}.png`;
+            link.download = fileName;
+            link.href = image;
+            link.click();
+
+            // 4. 画面表示を戻す（移動モードの枠などを再表示）
+            redraw(false);
+        };
+    </script>
+</body>
+</html>
