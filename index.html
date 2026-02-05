@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>手書きメモ - 画像リサイズ対応</title>
+    <title>手書きメモ - フル機能版</title>
 <style>
     body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #f0f0f0; font-family: sans-serif; }
     
+    /* ツールバー：スマホで見切れないよう折り返しと幅を調整 */
     .toolbar { 
         position: fixed; 
         top: 10px; 
@@ -80,9 +81,9 @@
         let currentObject = null;
         let selectedObject = null;
         let isDragging = false;
-        let isResizing = false; // リサイズ中フラグ
+        let isResizing = false;
         let startX, startY;
-        const HANDLE_SIZE = 10; // リサイズハンドルの大きさ
+        const HANDLE_SIZE = 10;
 
         function resizeCanvas() {
             canvas.width = window.innerWidth;
@@ -106,13 +107,21 @@
         document.getElementById('moveBtn').onclick = (e) => setMode('move', e.target);
         document.getElementById('imageBtn').onclick = () => imageInput.click();
 
-        // 画像読込処理 (共通)
+        // 画像読込・オブジェクト作成（消しゴムバグ修正済み）
         function addImageObject(img, x, y) {
             const scale = Math.min((canvas.width * 0.3) / img.width, (canvas.height * 0.3) / img.height, 1);
             const w = img.width * scale;
             const h = img.height * scale;
-            const obj = { type: 'image', img: img, x: x, y: y, w: w, h: h, bounds: { x: x, y: y, w: w, h: h } };
+            const obj = { 
+                type: 'image', 
+                img: img, 
+                x: x, 
+                y: y, 
+                w: w, 
+                h: h 
+            };
             objects.push(obj);
+            updateBounds(obj); // 挿入時に当たり判定を確定させる
             redraw();
             setMode('move', document.getElementById('moveBtn'));
         }
@@ -130,6 +139,7 @@
             e.target.value = '';
         };
 
+        // クリップボードからの貼り付け
         window.addEventListener('paste', (e) => {
             const items = e.clipboardData.items;
             for (let i = 0; i < items.length; i++) {
@@ -172,7 +182,6 @@
                     ctx.drawImage(obj.img, obj.x, obj.y, obj.w, obj.h);
                 }
 
-                // 選択中の表示
                 if (!isExport && mode === 'move' && obj === selectedObject) {
                     ctx.strokeStyle = '#007bff';
                     ctx.lineWidth = 1;
@@ -180,7 +189,6 @@
                     ctx.strokeRect(obj.bounds.x - 2, obj.bounds.y - 2, obj.bounds.w + 4, obj.bounds.h + 4);
                     ctx.setLineDash([]);
                     
-                    // 画像の場合のみリサイズハンドルを描画
                     if (obj.type === 'image') {
                         ctx.fillStyle = '#007bff';
                         ctx.fillRect(obj.x + obj.w - HANDLE_SIZE/2, obj.y + obj.h - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
@@ -196,11 +204,11 @@
         }
 
         function isHit(obj, pos) {
+            if (!obj.bounds) return false;
             return pos.x >= obj.bounds.x && pos.x <= obj.bounds.x + obj.bounds.w &&
                    pos.y >= obj.bounds.y && pos.y <= obj.bounds.y + obj.bounds.h;
         }
 
-        // ハンドルへの当たり判定
         function isHandleHit(obj, pos) {
             if (obj.type !== 'image') return false;
             const hX = obj.x + obj.w;
@@ -224,7 +232,6 @@
             } else if (mode === 'text') {
                 showTextInput(pos.x, pos.y);
             } else if (mode === 'move') {
-                // まずハンドルを触っているか確認
                 if (selectedObject && isHandleHit(selectedObject, pos)) {
                     isResizing = true;
                 } else {
@@ -239,7 +246,6 @@
             const pos = getMousePos(e);
 
             if (isResizing && selectedObject) {
-                // リサイズ処理 (アスペクト比を維持したい場合は調整可能ですが、今回は自由変倍)
                 selectedObject.w = Math.max(20, pos.x - selectedObject.x);
                 selectedObject.h = Math.max(20, pos.y - selectedObject.y);
                 updateBounds(selectedObject);
@@ -304,8 +310,8 @@
             textInputOverlay.onkeydown = (e) => {
                 if (e.key === 'Enter') {
                     const obj = { type: 'text', x, y, text: textInputOverlay.value, color: document.getElementById('colorPicker').value, width: parseInt(document.getElementById('lineWidth').value) };
-                    updateBounds(obj);
                     objects.push(obj);
+                    updateBounds(obj);
                     textInputOverlay.style.display = 'none';
                     redraw();
                 }
