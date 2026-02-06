@@ -7,7 +7,6 @@
 <style>
     body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #f0f0f0; font-family: sans-serif; }
     
-    /* ツールバー：スマホで見切れないよう折り返しと幅を調整 */
     .toolbar { 
         position: fixed; 
         top: 10px; 
@@ -30,22 +29,23 @@
     canvas { display: block; background-color: white; touch-action: none; }
 
     .btn { 
-        padding: 6px 10px; 
+        padding: 8px 12px; 
         cursor: pointer; 
         border: 1px solid #ccc; 
         border-radius: 15px; 
         background-color: white; 
-        font-size: 12px; 
+        font-size: 13px; 
         outline: none; 
-        white-space: nowrap; 
+        white-space: nowrap;
+        user-select: none;
     }
 
     .btn.active { background-color: #007bff; color: white; border-color: #007bff; }
     
     #textInputOverlay { position: fixed; display: none; border: 1px dashed #007bff; background: transparent; outline: none; z-index: 200; }
     
-    input[type="color"] { border: none; width: 22px; height: 22px; cursor: pointer; background: none; }
-    input[type="range"] { width: 60px; } 
+    input[type="color"] { border: none; width: 25px; height: 25px; cursor: pointer; background: none; }
+    input[type="range"] { width: 70px; } 
 
     .save-btn { background-color: #28a745; color: white; border: none; }
     #imageInput { display: none; }
@@ -83,7 +83,7 @@
         let isDragging = false;
         let isResizing = false;
         let startX, startY;
-        const HANDLE_SIZE = 10;
+        const HANDLE_SIZE = 15;
 
         function resizeCanvas() {
             canvas.width = window.innerWidth;
@@ -107,23 +107,16 @@
         document.getElementById('moveBtn').onclick = (e) => setMode('move', e.target);
         document.getElementById('imageBtn').onclick = () => imageInput.click();
 
-        // 画像読込・オブジェクト作成（消しゴムバグ修正済み）
         function addImageObject(img, x, y) {
             const scale = Math.min((canvas.width * 0.3) / img.width, (canvas.height * 0.3) / img.height, 1);
             const w = img.width * scale;
             const h = img.height * scale;
-            const obj = { 
-                type: 'image', 
-                img: img, 
-                x: x, 
-                y: y, 
-                w: w, 
-                h: h 
-            };
+            const obj = { type: 'image', img: img, x: x, y: y, w: w, h: h };
             objects.push(obj);
-            updateBounds(obj); // 挿入時に当たり判定を確定させる
+            updateBounds(obj);
             redraw();
             setMode('move', document.getElementById('moveBtn'));
+            selectedObject = obj; // 挿入した画像を選択状態にする
         }
 
         imageInput.onchange = (e) => {
@@ -139,7 +132,7 @@
             e.target.value = '';
         };
 
-        // クリップボードからの貼り付け
+        // --- クリップボードからの貼り付け機能の修正 ---
         window.addEventListener('paste', (e) => {
             const items = e.clipboardData.items;
             for (let i = 0; i < items.length; i++) {
@@ -148,7 +141,10 @@
                     const reader = new FileReader();
                     reader.onload = (ev) => {
                         const img = new Image();
-                        img.onload = () => addImageObject(img, window.innerWidth/2 - 50, window.innerHeight/2 - 50);
+                        img.onload = () => {
+                            // 画面中央付近に配置
+                            addImageObject(img, window.innerWidth/2 - (img.width*0.15), window.innerHeight/2 - (img.height*0.15));
+                        };
                         img.src = ev.target.result;
                     };
                     reader.readAsDataURL(blob);
@@ -184,11 +180,10 @@
 
                 if (!isExport && mode === 'move' && obj === selectedObject) {
                     ctx.strokeStyle = '#007bff';
-                    ctx.lineWidth = 1;
+                    ctx.lineWidth = 2;
                     ctx.setLineDash([5, 5]);
                     ctx.strokeRect(obj.bounds.x - 2, obj.bounds.y - 2, obj.bounds.w + 4, obj.bounds.h + 4);
                     ctx.setLineDash([]);
-                    
                     if (obj.type === 'image') {
                         ctx.fillStyle = '#007bff';
                         ctx.fillRect(obj.x + obj.w - HANDLE_SIZE/2, obj.y + obj.h - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
@@ -197,10 +192,11 @@
             });
         }
 
-        function getMousePos(e) {
-            const x = e.clientX || (e.touches && e.touches[0].clientX);
-            const y = e.clientY || (e.touches && e.touches[0].clientY);
-            return { x, y };
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return { x: clientX - rect.left, y: clientY - rect.top };
         }
 
         function isHit(obj, pos) {
@@ -217,14 +213,22 @@
                    pos.y >= hY - HANDLE_SIZE && pos.y <= hY + HANDLE_SIZE;
         }
 
-        canvas.onmousedown = canvas.ontouchstart = (e) => {
-            if (e.type === 'touchstart') e.preventDefault();
-            const pos = getMousePos(e);
+        const handleStart = (e) => {
+            if (e.type.startsWith('touch')) {
+                // ツールバー上の操作でなければスクロールを防止
+                if (e.target.tagName === 'CANVAS') e.preventDefault();
+            }
+            const pos = getPos(e);
             startX = pos.x; startY = pos.y;
 
             if (mode === 'pen') {
                 isDragging = true;
-                currentObject = { type: 'pen', color: document.getElementById('colorPicker').value, width: parseInt(document.getElementById('lineWidth').value), points: [{x: pos.x, y: pos.y}] };
+                currentObject = { 
+                    type: 'pen', 
+                    color: document.getElementById('colorPicker').value, 
+                    width: parseInt(document.getElementById('lineWidth').value), 
+                    points: [{x: pos.x, y: pos.y}] 
+                };
                 objects.push(currentObject);
             } else if (mode === 'eraser') {
                 isDragging = true;
@@ -242,14 +246,15 @@
             }
         };
 
-        window.onmousemove = window.ontouchmove = (e) => {
-            const pos = getMousePos(e);
+        const handleMove = (e) => {
+            if (!isDragging && !isResizing) return;
+            if (e.type.startsWith('touch')) e.preventDefault();
+            const pos = getPos(e);
 
             if (isResizing && selectedObject) {
                 selectedObject.w = Math.max(20, pos.x - selectedObject.x);
                 selectedObject.h = Math.max(20, pos.y - selectedObject.y);
                 updateBounds(selectedObject);
-                redraw();
             } else if (isDragging) {
                 if (mode === 'pen') {
                     currentObject.points.push({x: pos.x, y: pos.y});
@@ -266,15 +271,22 @@
                     startX = pos.x; startY = pos.y;
                 }
                 updateBounds(selectedObject || currentObject);
-                redraw();
             }
+            redraw();
         };
 
-        window.onmouseup = window.ontouchend = () => {
+        const handleEnd = () => {
             isDragging = false;
             isResizing = false;
             currentObject = null;
         };
+
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('touchstart', handleStart, {passive: false});
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('touchmove', handleMove, {passive: false});
+        window.addEventListener('mouseup', handleEnd);
+        window.addEventListener('touchend', handleEnd);
 
         function eraseAt(pos) {
             const targetIndex = objects.findIndex(obj => isHit(obj, pos));
@@ -324,7 +336,7 @@
             redraw(true); 
             const image = canvas.toDataURL("image/png");
             const now = new Date();
-            const fileName = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.png`;
+            const fileName = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_memo.png`;
             const link = document.createElement('a');
             link.download = fileName;
             link.href = image;
